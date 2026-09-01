@@ -13,7 +13,8 @@ services:
       - ./tests:/home/jovyan/tests
     environment:
       JUPYTER_ENABLE_LAB: "yes"
-      PYTHONPATH: /home/jovyan/src
+      #PYTHONPATH: /home/jovyan/src
+      PYTHONPATH: "/usr/local/spark/python/lib/py4j-0.10.9.9-src.zip:/usr/local/spark/python:/home/jovyan/src"
       PYSPARK_SUBMIT_ARGS: "--packages org.postgresql:postgresql:42.7.0 pyspark-shell"
     depends_on:
       postgres:
