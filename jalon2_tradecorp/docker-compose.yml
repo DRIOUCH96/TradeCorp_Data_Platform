@@ -1,0 +1,55 @@
+services:
+  spark:
+    build: .
+    image: tradecorp-pyspark:latest
+    container_name: tradecorp_spark
+    ports:
+      - "8888:8888"
+      - "4040:4040"
+    volumes:
+      - ./data:/home/jovyan/data
+      - ./notebooks:/home/jovyan/notebooks
+      - ./src:/home/jovyan/src
+      - ./tests:/home/jovyan/tests
+    environment:
+      JUPYTER_ENABLE_LAB: "yes"
+      PYTHONPATH: /home/jovyan/src
+      PYSPARK_SUBMIT_ARGS: "--packages org.postgresql:postgresql:42.7.0 pyspark-shell"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:15
+    container_name: tradecorp_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: tradecorp
+    ports:
+      - "5434:5432"
+    volumes:
+      - tradecorp_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d tradecorp"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: tradecorp_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@tradecorp.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "8086:80"
+    volumes:
+      - tradecorp_pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  tradecorp_pgdata:
+  tradecorp_pgadmin_data:
