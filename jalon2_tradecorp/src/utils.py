@@ -1,257 +1,199 @@
+import os
+from pathlib import Path
+
+from azure.storage.blob import BlobServiceClient
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
-from pyspark.sql.types import DoubleType, IntegerType, StringType
-from azure.storage.blob import BlobServiceClient
+
+
 def create_blob_service_client() -> BlobServiceClient:
-    """Construit le client Azure depuis les variables d'environnement."""
+    """Crée le client de connexion à ADLS Gen2."""
 
     account_name = os.environ["AZURE_STORAGE_ACCOUNT_NAME"]
-    account_url = (
-        account_name
-        if account_name.startswith("http")
-        else f"https://{account_name}.blob.core.windows.net"
-    )
+    account_key = os.environ["AZURE_STORAGE_ACCOUNT_KEY"]
 
     return BlobServiceClient(
-        account_url=account_url,
-        credential=os.environ["AZURE_STORAGE_ACCOUNT_KEY"],
+        account_url=f"https://{account_name}.blob.core.windows.net",
+        credential=account_key,
     )
 
+
+def download_blob(
+    blob_name: str,
+    destination: str | Path,
+    container_name: str | None = None,
+) -> str:
+    """Télécharge un fichier ADLS dans un emplacement local."""
+
+    container_name = container_name or os.getenv(
+        "AZURE_RAW_CONTAINER",
+        "raw",
+    )
+
+    destination_path = Path(destination)
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+
+    container_client = create_blob_service_client().get_container_client(
+        container_name
+    )
+
+    with destination_path.open("wb") as file_handle:
+        file_handle.write(
+            container_client.download_blob(blob_name).readall()
+        )
+
+    return str(destination_path)
+
+
 def clean_customers(df: DataFrame) -> DataFrame:
-    """Nettoie les champs texte des clients et supprime les doublons."""
+    """Nettoie la table des clients."""
 
-    result = df
-    for field in result.schema.fields:
-        if isinstance(field.dataType, StringType):
-            result = result.withColumn(
-                field.name,
-                F.trim(F.col(field.name)),
-            )
-
-    if "contact_name" in result.columns:
-        result = result.withColumn(
+    return (
+        df.withColumn(
+            "company_name",
+            F.trim(F.col("company_name")),
+        )
+        .withColumn(
             "contact_name",
-            F.initcap(F.col("contact_name")),
+            F.initcap(F.trim(F.col("contact_name"))),
         )
-    if "country" in result.columns:
-        result = result.withColumn(
+        .withColumn(
             "country",
-            F.upper(F.col("country")),
+            F.upper(F.trim(F.col("country"))),
         )
-    if "customer_id" in result.columns:
-        result = result.dropDuplicates(["customer_id"])
-
-    return result
-
-
-def clean_costumers(df: DataFrame) -> DataFrame:
-    """Alias historique de clean_customers, conservé pour compatibilité."""
-
-    return clean_customers(df)
+        .dropDuplicates(["customer_id"])
+    )
 
 
 def clean_orders(df: DataFrame) -> DataFrame:
-    """Supprime les commandes non livrées et convertit leurs types."""
+    """Nettoie la table des commandes."""
 
-    result = df
-    if "shipped_date" in result.columns:
-        result = result.dropna(subset=["shipped_date"])
+    result = df.filter(
+        F.col("shipped_date").isNotNull()
+        & (F.trim(F.col("shipped_date")) != "")
+    )
 
-    for column_name in ["order_date", "shipped_date", "required_date"]:
-        if column_name in result.columns:
-            result = result.withColumn(
-                column_name,
-                F.to_date(F.col(column_name), "yyyy-MM-dd"),
-            )
-
-    if "freight" in result.columns:
+    for column_name in [
+        "order_date",
+        "required_date",
+        "shipped_date",
+    ]:
         result = result.withColumn(
+            column_name,
+            F.to_date(F.col(column_name)),
+        )
+
+    result = (
+        result.withColumn(
             "freight",
-            F.col("freight").cast(DoubleType()),
+            F.col("freight").cast("double"),
         )
-    if "order_id" in result.columns:
-        result = result.withColumn(
-            "order_id",
-            F.col("order_id").cast(IntegerType()),
-        )
-    if "ship_via" in result.columns:
-        result = result.withColumnRenamed("ship_via", "shipper_id")
-    if "shipped_date" in result.columns:
-        result = result.withColumn(
+        .withColumnRenamed("ship_via", "shipper_id")
+        .withColumn(
             "is_shipped",
             F.col("shipped_date").isNotNull(),
         )
+    )
 
     return result
 
 
 def clean_order_details(df: DataFrame) -> DataFrame:
-    """Convertit les types des détails et calcule leur sous-total."""
+    """Nettoie les lignes de commande."""
 
-    result = df
-    for column_name, data_type in [
-        ("unit_price", DoubleType()),
-        ("quantity", IntegerType()),
-        ("discount", DoubleType()),
-    ]:
-        if column_name in result.columns:
-            result = result.withColumn(
-                column_name,
-                F.col(column_name).cast(data_type),
-            )
-
-    if "unit_price" in result.columns:
-        result = result.withColumnRenamed("unit_price", "prix_unitaire")
-    if "quantity" in result.columns:
-        result = result.withColumnRenamed("quantity", "quantite")
-    if {"prix_unitaire", "quantite", "discount"}.issubset(result.columns):
-        result = result.withColumn(
-            "sous_total",
-            F.round(
-                F.col("prix_unitaire")
-                * F.col("quantite")
-                * (F.lit(1.0) - F.col("discount")),
-                2,
-            ),
+    return (
+        df.withColumn(
+            "unit_price",
+            F.col("unit_price").cast("double"),
         )
+        .withColumn(
+            "quantity",
+            F.col("quantity").cast("integer"),
+        )
+        .withColumn(
+            "discount",
+            F.col("discount").cast("double"),
+        )
+        .withColumnRenamed("unit_price", "prix_unitaire")
+        .withColumnRenamed("quantity", "quantite")
+    )
 
-    return result
+
+def add_sous_total(df: DataFrame) -> DataFrame:
+    """Calcule le sous-total après remise."""
+
+    remise = F.coalesce(
+        F.col("discount"),
+        F.lit(0.0),
+    )
+
+    return df.withColumn(
+        "sous_total",
+        F.round(
+            F.col("prix_unitaire")
+            * F.col("quantite")
+            * (F.lit(1.0) - remise),
+            2,
+        ),
+    )
 
 
 def clean_employees(df: DataFrame) -> DataFrame:
-    """Sélectionne les champs utiles des employés et convertit les dates."""
+    """Nettoie la table des employés."""
 
-    selected_columns = [
+    result = df.select(
         "employee_id",
-        "last_name",
         "first_name",
+        "last_name",
         "title",
         "hire_date",
         "city",
-        "region",
-        "postal_code",
         "country",
-    ]
-    result = df.select(
-        *[column_name for column_name in selected_columns if column_name in df.columns]
     )
-    if "hire_date" in result.columns:
-        result = result.withColumn(
+
+    return (
+        result.withColumn(
+            "first_name",
+            F.trim(F.col("first_name")),
+        )
+        .withColumn(
+            "last_name",
+            F.trim(F.col("last_name")),
+        )
+        .withColumn(
             "hire_date",
-            F.to_date(F.col("hire_date"), "yyyy-MM-dd"),
+            F.to_date(F.col("hire_date")),
         )
-    if {"first_name", "last_name"}.issubset(result.columns):
-        result = result.withColumn(
+        .withColumn(
             "full_name",
-            F.concat_ws(" ", "first_name", "last_name"),
+            F.concat_ws(
+                " ",
+                F.col("first_name"),
+                F.col("last_name"),
+            ),
         )
-    return result
+    )
 
 
 def clean_products(df: DataFrame) -> DataFrame:
-    """Convertit les types produits et ajoute l'indicateur de stock."""
+    """Nettoie la table des produits."""
 
-    result = df
-    for column_name, data_type in [
-        ("unit_price", DoubleType()),
-        ("units_in_stock", IntegerType()),
-        ("units_on_order", IntegerType()),
-        ("reorder_level", IntegerType()),
-    ]:
-        if column_name in result.columns:
-            result = result.withColumn(
-                column_name,
-                F.col(column_name).cast(data_type),
-            )
-    if "units_in_stock" in result.columns:
-        result = result.withColumn(
-            "en_stock",
-            F.col("units_in_stock") > 0,
+    result = (
+        df.withColumn(
+            "unit_price",
+            F.col("unit_price").cast("double"),
         )
-    return result
-
-
-def _prefix_non_keys(df: DataFrame, prefix: str, keys: set[str]) -> DataFrame:
-    return df.select(
-        *[
-            F.col(column_name).alias(
-                column_name
-                if column_name in keys
-                else f"{prefix}_{column_name}"
-            )
-            for column_name in df.columns
-        ]
+        .withColumn(
+            "units_in_stock",
+            F.col("units_in_stock").cast("integer"),
+        )
     )
 
-
-def build_enriched(dataframes: dict[str, DataFrame]) -> DataFrame:
-    """Nettoie les sources et les joint en un DataFrame enrichi."""
-
-    enriched = clean_orders(dataframes["orders"])
-    sources = [
-        (clean_customers(dataframes["customers"]), "customer", {"customer_id"}, "customer_id"),
-        (clean_employees(dataframes["employees"]), "employee", {"employee_id"}, "employee_id"),
-        (clean_order_details(dataframes["order_details"]), "order_detail", {"order_id", "product_id"}, "order_id"),
-        (clean_products(dataframes["products"]), "product", {"product_id", "supplier_id", "category_id"}, "product_id"),
-        (dataframes["categories"], "category", {"category_id"}, "category_id"),
-        (dataframes["suppliers"], "supplier", {"supplier_id"}, "supplier_id"),
-        (dataframes["shippers"], "shipper", {"shipper_id"}, "shipper_id"),
-    ]
-    for dataframe, prefix, keys, join_key in sources:
-        enriched = enriched.join(
-            _prefix_non_keys(dataframe, prefix, keys),
-            on=join_key,
-            how="left",
+    return result.withColumn(
+        "en_stock",
+        F.coalesce(
+            F.col("units_in_stock"),
+            F.lit(0),
         )
-    return enriched
-def build_enriched(
-    dataframes: dict[str, DataFrame],
-    country_currency: DataFrame | None = None,
-    exchange_rates: dict[str, float] | None = None,
-    base_currency: str = "EUR",
-) -> DataFrame:
-    """Nettoie les sources et construit le DataFrame enrichi final."""
-
-    customers = clean_customers(dataframes["customers"])
-    orders = clean_orders(dataframes["orders"])
-    order_details = add_sous_total(
-        clean_order_details(dataframes["order_details"])
+        > 0,
     )
-    employees = clean_employees(dataframes["employees"])
-    products = clean_products(dataframes["products"])
-
-    enriched = orders
-    for dataframe, prefix, keys, join_key in [
-        (customers, "customer", {"customer_id"}, "customer_id"),
-        (employees, "employee", {"employee_id"}, "employee_id"),
-        (
-            order_details,
-            "order_detail",
-            {"order_id", "product_id"},
-            "order_id",
-        ),
-        (
-            products,
-            "product",
-            {"product_id", "supplier_id", "category_id"},
-            "product_id",
-        ),
-        (dataframes["categories"], "category", {"category_id"}, "category_id"),
-        (dataframes["suppliers"], "supplier", {"supplier_id"}, "supplier_id"),
-        (dataframes["shippers"], "shipper", {"shipper_id"}, "shipper_id"),
-    ]:
-        enriched = enriched.join(
-            _prefix_non_keys(dataframe, prefix, keys),
-            on=join_key,
-            how="left",
-        )
-
-    if country_currency is not None and exchange_rates is not None:
-        enriched = add_local_currency(
-            enriched,
-            country_currency,
-            exchange_rates,
-            base_currency,
-        )
-
-    return enriched

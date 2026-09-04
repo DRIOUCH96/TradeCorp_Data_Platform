@@ -1,57 +1,125 @@
+import logging
 import os
 import tempfile
+from pathlib import Path
 
 from pyspark.sql import SparkSession
 
-from fetch_exchange_rates import fetch_exchange_rates
-from reader import read_business_csvs, read_country_currency_reference
-from enrichment import build_enriched
+from enrichment import add_currency_column
+from reader import read_business_csvs, read_reference_files
+from transformer import build_enriched
 from writer import write_parquet
 
 
+LOGGER = logging.getLogger(__name__)
+
+
 def main() -> None:
-    """Orchestre la lecture Azure, la transformation et l'écriture Parquet."""
+    """Orchestre le pipeline TradeCorp de bout en bout."""
 
-    spark = (
-        SparkSession.builder
-        .appName("TradeCorp Data Pipeline")
-        .getOrCreate()
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
-    spark.sparkContext.setLogLevel("WARN")
 
-    temporary_directory = tempfile.mkdtemp(
-        prefix="tradecorp_raw_",
-        dir=os.getenv("LOCAL_TMP_DIR", "/home/jovyan/data/tmp"),
-    )
-    output_path = os.getenv(
-        "CLEAN_OUTPUT_PATH",
-        "orders_enriched.parquet",
-    )
+    spark = None
 
     try:
-        print("1/3 - Lecture des CSV depuis le conteneur raw")
-        raw_dataframes = read_business_csvs(
-            spark,
-            temporary_directory,
-        )
-        country_currency = read_country_currency_reference(spark)
-        base_currency = os.getenv("EXCHANGE_RATE_BASE", "EUR")
-        exchange_rates = fetch_exchange_rates(base_currency)
+        LOGGER.info("Démarrage de la SparkSession")
 
-        print("2/3 - Transformation et enrichissement")
-        enriched_dataframe = build_enriched(
-            raw_dataframes,
-            country_currency=country_currency,
-            exchange_rates=exchange_rates,
+        spark = (
+            SparkSession.builder
+            .appName("TradeCorp Data Pipeline")
+            .getOrCreate()
         )
-        row_count = enriched_dataframe.count()
-        print(f"Lignes enrichies : {row_count}")
 
-        print("3/3 - Écriture Parquet dans le conteneur clean")
-        write_parquet(enriched_dataframe, output_path)
-        print(f"Pipeline terminé : {output_path}")
+        spark.sparkContext.setLogLevel("WARN")
+
+        temporary_root = Path(
+            os.getenv("LOCAL_TMP_DIR", "/home/jovyan/data/tmp")
+        )
+        temporary_root.mkdir(parents=True, exist_ok=True)
+
+        with tempfile.TemporaryDirectory(
+            prefix="tradecorp_pipeline_",
+            dir=temporary_root,
+        ) as temporary_directory:
+            temporary_path = Path(temporary_directory)
+
+            LOGGER.info(
+                "Étape 1/4 - Lecture des huit tables métier"
+            )
+
+            dataframes = read_business_csvs(
+                spark,
+                temporary_path / "business",
+            )
+
+            LOGGER.info(
+                "Étape 2/4 - Transformation et jointure"
+            )
+
+            transformed = build_enriched(dataframes)
+
+            LOGGER.info(
+                "Étape 3/4 - Lecture des références et enrichissement"
+            )
+
+            country_currency, exchange_rates = (
+                read_reference_files(
+                    spark,
+                    temporary_path / "reference",
+                )
+            )
+
+            enriched = add_currency_column(
+                transformed,
+                country_currency,
+                exchange_rates,
+            )
+
+            row_count = enriched.count()
+
+            LOGGER.info(
+                "DataFrame final : %s lignes, %s colonnes",
+                row_count,
+                len(enriched.columns),
+            )
+
+            LOGGER.info(
+                "Colonnes finales : %s",
+                ", ".join(enriched.columns),
+            )
+
+            LOGGER.info(
+                "Étape 4/4 - Écriture dans la zone clean"
+            )
+
+            output_name = os.getenv(
+                "CLEAN_OUTPUT_PATH",
+                "orders_enriched.parquet",
+            )
+
+            destination = write_parquet(
+                enriched,
+                output_name,
+            )
+
+            LOGGER.info(
+                "Pipeline terminé avec succès : %s",
+                destination,
+            )
+
+    except Exception:
+        LOGGER.exception(
+            "Échec du pipeline TradeCorp"
+        )
+        raise
+
     finally:
-        spark.stop()
+        if spark is not None:
+            LOGGER.info("Arrêt de la SparkSession")
+            spark.stop()
 
 
 if __name__ == "__main__":

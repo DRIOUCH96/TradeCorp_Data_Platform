@@ -1,172 +1,212 @@
-# TradeCorp Data Platform — Jalon 2
+# TradeCorp Data Platform — Jalon 2, Partie 2
 
-## Présentation
+## Objectif
 
-Ce projet met en place un pipeline ETL avec PySpark pour traiter les données commerciales de TradeCorp.
+Ce projet transforme le prototype réalisé avec des notebooks en un pipeline PySpark modulaire, testable et exécutable depuis un terminal.
 
-Le pipeline permet de :
+Le pipeline réalise les étapes suivantes :
 
-- lire les fichiers CSV sources ;
-- nettoyer et valider les données ;
-- effectuer des jointures et des agrégations ;
-- utiliser des Window Functions ;
-- produire des fichiers Parquet ;
-- charger le résultat final dans PostgreSQL ;
-- tester les transformations avec pytest.
+1. téléchargement des huit CSV métier depuis la zone `raw` d’ADLS Gen2 ;
+2. nettoyage et typage des données ;
+3. jointure des sept tables utiles ;
+4. ajout de la devise du client et conversion du sous-total ;
+5. écriture du résultat en Parquet dans la zone `clean`.
 
-## Technologies utilisées
-
-- Python
-- PySpark
-- PostgreSQL
-- Docker et Docker Compose
-- JupyterLab
-- pgAdmin
-- pytest
-
-## Structure du projet
+## Architecture
 
 ```text
 jalon2_tradecorp/
-├── captures/
 ├── data/
-│   ├── raw/
-│   ├── tmp/
-│   └── output/
-├── notebooks/
-│   ├── 01_exploration.ipynb
-│   ├── 02_nettoyage.ipynb
-│   └── 03_transformations.ipynb
+│   └── raw/
+│       └── reference/
+│           └── country_currency.csv
 ├── src/
+│   ├── utils.py
 │   ├── reader.py
 │   ├── transformer.py
+│   ├── enrichment.py
 │   ├── writer.py
-│   └── pipeline.py
+│   ├── pipeline.py
+│   ├── fetch_exchange_rates.py
+│   └── upload_country_currency.py
 ├── tests/
-│   └── test_transformer.py
-├── Dockerfile
+│   ├── test_transformers.py
+│   └── run_tests.py
+├── .env.example
 ├── docker-compose.yml
+├── Dockerfile
+├── requirements.txt
 └── README.md
 ```
 
-## Prérequis
+## Responsabilité des modules
 
-- Docker Desktop
-- Visual Studio Code
-- Git
+- `utils.py` : connexion à ADLS et fonctions de nettoyage.
+- `reader.py` : téléchargement et lecture des données.
+- `transformer.py` : jointures et construction du DataFrame métier.
+- `enrichment.py` : ajout de `currency` et `sous_total_local`.
+- `writer.py` : écriture Parquet et upload vers la zone `clean`.
+- `pipeline.py` : orchestration, journalisation et gestion des erreurs.
+- `fetch_exchange_rates.py` : récupération quotidienne des taux de change.
+- `upload_country_currency.py` : upload unique du mapping pays-devise.
 
-## Lancement du projet
+## Configuration
 
-Depuis le dossier du projet :
+Créer `.env` à partir de `.env.example`, puis renseigner les accès Azure :
+
+```dotenv
+AZURE_STORAGE_ACCOUNT_NAME=nom_du_compte
+AZURE_STORAGE_ACCOUNT_KEY=cle_du_compte
+AZURE_RAW_CONTAINER=raw
+AZURE_RAW_REFERENCE_PATH=reference
+AZURE_CLEAN_CONTAINER=clean
+CLEAN_OUTPUT_PATH=orders_enriched.parquet
+LOCAL_TMP_DIR=/home/jovyan/data/tmp
+```
+
+Le fichier `.env` ne doit jamais être versionné.
+
+## Construction du conteneur
 
 ```powershell
 docker compose up -d --build
 docker compose ps
 ```
 
-Les trois conteneurs suivants doivent être actifs :
-
-- `tradecorp_spark`
-- `tradecorp_postgres`
-- `tradecorp_pgadmin`
-
-## Accès aux services
-
-- JupyterLab : http://localhost:8888
-- Spark UI : http://localhost:4040
-- pgAdmin : http://localhost:8086
-- PostgreSQL depuis Windows : `localhost:5434`
-
-Pour récupérer le jeton Jupyter :
-
-```powershell
-docker logs tradecorp_spark 2>&1 | findstr token
-```
-
-## Configuration pgAdmin
-
-Connexion à pgAdmin :
-
-- Email : `admin@tradecorp.com`
-- Mot de passe : `admin`
-
-Configuration du serveur PostgreSQL :
-
-- Host : `postgres`
-- Port : `5432`
-- Database : `tradecorp`
-- Username : `postgres`
-- Password : `postgres`
-
-## Notebooks
-
-Les analyses sont réparties dans trois notebooks :
-
-1. `01_exploration.ipynb` : chargement et exploration des données.
-2. `02_nettoyage.ipynb` : nettoyage, typage et contrôles qualité.
-3. `03_transformations.ipynb` : jointures, agrégations, Window Functions, Parquet et PostgreSQL.
-
-## Exécution du pipeline
-
-```powershell
-docker exec tradecorp_spark spark-submit --packages org.postgresql:postgresql:42.7.0 /home/jovyan/src/pipeline.py
-```
-
-Le pipeline produit notamment :
+Le conteneur Spark utilisé par les commandes est :
 
 ```text
-data/output/orders_enriched.parquet/
-data/output/orders_by_country/
+tradecorp_spark
 ```
 
-Il crée également la table PostgreSQL :
+## Upload initial du mapping pays-devise
 
-```text
-orders_enriched
-```
-
-## Exécution des tests unitaires
+Cette commande ne doit être exécutée qu’une seule fois :
 
 ```powershell
-docker exec tradecorp_spark pytest /home/jovyan/tests/ -v --tb=short
+docker exec tradecorp_spark python /home/jovyan/src/upload_country_currency.py
+```
+
+Le fichier est envoyé vers :
+
+```text
+raw/reference/country_currency.csv
+```
+
+## Mise à jour quotidienne des taux
+
+Le script utilise l’API suivante :
+
+```text
+https://api.exchangerate-api.com/v4/latest/USD
+```
+
+Exécution :
+
+```powershell
+docker exec tradecorp_spark python /home/jovyan/src/fetch_exchange_rates.py
+```
+
+La réponse JSON brute est envoyée vers :
+
+```text
+raw/reference/exchange_rates.json
+```
+
+## Validation du lecteur
+
+```powershell
+docker exec tradecorp_spark spark-submit /home/jovyan/src/reader.py
+```
+
+Le lecteur télécharge explicitement les huit fichiers métier :
+
+- `categories.csv`
+- `customers.csv`
+- `employees.csv`
+- `order_details.csv`
+- `orders.csv`
+- `products.csv`
+- `shippers.csv`
+- `suppliers.csv`
+
+Il télécharge également les deux fichiers du dossier `reference`.
+
+## Exécution des tests
+
+Les tests doivent être lancés avec `spark-submit` :
+
+```powershell
+docker exec tradecorp_spark spark-submit /home/jovyan/tests/run_tests.py
 ```
 
 Résultat attendu :
 
 ```text
-3 passed
+4 passed
 ```
 
-## Vérification de PostgreSQL
+Les quatre tests vérifient :
+
+- la suppression des commandes sans date de livraison ;
+- le calcul de `sous_total` ;
+- le nettoyage des clients ;
+- l’enrichissement monétaire avec des taux simulés.
+
+## Exécution du pipeline
+
+Avant le pipeline, vérifier que les deux fichiers de référence sont présents dans ADLS.
 
 ```powershell
-docker exec tradecorp_postgres psql -U postgres -d tradecorp -c "SELECT COUNT(*) FROM orders_enriched;"
+docker exec tradecorp_spark spark-submit /home/jovyan/src/pipeline.py
 ```
 
-Le résultat attendu est de `2082` lignes.
+Ordre d’exécution :
 
-## Captures d’écran
+```text
+lecture → transformation → enrichissement → écriture
+```
 
-### Spark UI
+La SparkSession est arrêtée dans tous les cas, y compris lorsqu’une erreur survient.
 
-![Spark UI](captures/01-spark-ui.png)
+## Résultat
 
-### Exécution du pipeline avec spark-submit
+Le résultat est écrit dans :
 
-![Pipeline PySpark](captures/03-spark-submit-pipeline.png)
+```text
+clean/orders_enriched.parquet
+```
 
-### Tests unitaires
+Le schéma final contient notamment :
 
-![Tests pytest](captures/04-pytest-green.png)
+```text
+order_id
+customer_id
+employee_id
+product_id
+order_date
+required_date
+shipped_date
+freight
+is_shipped
+prix_unitaire
+quantite
+discount
+sous_total
+customer_name
+customer_country
+customer_city
+product_name
+category_name
+en_stock
+full_name
+shipper_name
+currency
+sous_total_local
+```
 
-## Arrêt du projet
+## Arrêt des conteneurs
 
 ```powershell
 docker compose down
-```
-
-Pour supprimer également les volumes PostgreSQL :
-
-```powershell
-docker compose down -v
 ```

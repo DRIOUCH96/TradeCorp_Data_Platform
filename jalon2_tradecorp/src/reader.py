@@ -1,10 +1,15 @@
+import json
+import logging
 import os
 import tempfile
 from pathlib import Path
 
-from azure.storage.blob import BlobServiceClient
 from pyspark.sql import DataFrame, SparkSession
 
+from utils import download_blob
+
+
+LOGGER = logging.getLogger(__name__)
 
 BUSINESS_CSV_FILES = (
     "categories.csv",
@@ -18,103 +23,182 @@ BUSINESS_CSV_FILES = (
 )
 
 
-def create_blob_service_client() -> BlobServiceClient:
-    """Construit le client Azure depuis les variables d'environnement."""
-
-    account_name = os.environ["AZURE_STORAGE_ACCOUNT_NAME"]
-    account_url = (
-        account_name
-        if account_name.startswith("http")
-        else f"https://{account_name}.blob.core.windows.net"
-    )
-    return BlobServiceClient(
-        account_url=account_url,
-        credential=os.environ["AZURE_STORAGE_ACCOUNT_KEY"],
-    )
-
-
 def download_business_csvs(
-    destination: str,
-    container_name: str | None = None,
+    destination: str | Path,
 ) -> dict[str, str]:
-    """Télécharge uniquement les huit CSV métier dans un dossier local."""
+    """Télécharge uniquement les huit CSV métier."""
 
     destination_path = Path(destination)
     destination_path.mkdir(parents=True, exist_ok=True)
-    container_name = container_name or os.getenv("AZURE_RAW_CONTAINER", "raw")
-    container_client = create_blob_service_client().get_container_client(
-        container_name
-    )
 
     local_paths = {}
+
     for filename in BUSINESS_CSV_FILES:
         local_path = destination_path / filename
-        blob_client = container_client.get_blob_client(filename)
-        with local_path.open("wb") as file_handle:
-            file_handle.write(blob_client.download_blob().readall())
-        local_paths[filename.removesuffix(".csv")] = str(local_path)
-        print(f"Téléchargé : {filename}")
+
+        download_blob(
+            blob_name=filename,
+            destination=local_path,
+        )
+
+        table_name = Path(filename).stem
+        local_paths[table_name] = str(local_path)
+
+        LOGGER.info("Fichier métier téléchargé : %s", filename)
 
     return local_paths
 
 
-def read_csv(
+def read_business_csvs(
     spark: SparkSession,
-    path: str,
-    filename: str,
-) -> DataFrame:
-    """Lit un fichier CSV avec son en-tête et infère son schéma."""
+    destination: str | Path,
+) -> dict[str, DataFrame]:
+    """Télécharge et lit les huit CSV métier avec Spark."""
 
-    full_path = f"{path.rstrip('/')}/{filename}"
-    return spark.read.csv(
-        full_path,
+    local_paths = download_business_csvs(destination)
+
+    return {
+        table_name: spark.read.csv(
+            local_path,
+            header=True,
+            inferSchema=True,
+        )
+        for table_name, local_path in local_paths.items()
+    }
+
+
+def download_reference_files(
+    destination: str | Path,
+) -> dict[str, str]:
+    """Télécharge les deux fichiers de référence depuis raw/reference."""
+
+    destination_path = Path(destination)
+    destination_path.mkdir(parents=True, exist_ok=True)
+
+    reference_prefix = os.getenv(
+        "AZURE_RAW_REFERENCE_PATH",
+        "reference",
+    ).strip("/")
+
+    filenames = (
+        "country_currency.csv",
+        "exchange_rates.json",
+    )
+
+    local_paths = {}
+
+    for filename in filenames:
+        local_path = destination_path / filename
+        blob_name = f"{reference_prefix}/{filename}"
+
+        download_blob(
+            blob_name=blob_name,
+            destination=local_path,
+        )
+
+        local_paths[Path(filename).stem] = str(local_path)
+
+        LOGGER.info("Fichier de référence téléchargé : %s", blob_name)
+
+    return local_paths
+
+
+def read_reference_files(
+    spark: SparkSession,
+    destination: str | Path,
+) -> tuple[DataFrame, dict[str, float]]:
+    """Télécharge et lit le mapping pays-devise et les taux."""
+
+    local_paths = download_reference_files(destination)
+
+    country_currency = spark.read.csv(
+        local_paths["country_currency"],
         header=True,
         inferSchema=True,
     )
 
+    with Path(local_paths["exchange_rates"]).open(
+        "r",
+        encoding="utf-8",
+    ) as file_handle:
+        exchange_payload = json.load(file_handle)
 
-def read_business_csvs(
-    spark: SparkSession,
-    destination: str,
-) -> dict[str, DataFrame]:
-    """Télécharge puis lit les huit CSV métier avec Spark."""
+    rates = exchange_payload.get("rates")
 
-    local_paths = download_business_csvs(destination)
-    return {
-        name: spark.read.csv(
-            path,
-            header=True,
-            inferSchema=True,
+    if not isinstance(rates, dict):
+        raise ValueError(
+            "Le fichier exchange_rates.json ne contient pas de taux valides"
         )
-        for name, path in local_paths.items()
+
+    exchange_rates = {
+        currency.upper(): float(rate)
+        for currency, rate in rates.items()
     }
 
-
-def read_country_currency_reference(
-    spark: SparkSession,
-    path: str = "/home/jovyan/data/raw/reference/country_currency.csv",
-) -> DataFrame:
-    """Lit la référence pays-devise utilisée par l'enrichissement."""
-
-    return spark.read.csv(path, header=True, inferSchema=True)
+    return country_currency, exchange_rates
 
 
 def main() -> None:
+    """Teste le téléchargement et la lecture des fichiers ADLS."""
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
+
     spark = (
         SparkSession.builder
-        .appName("TradeCorp CSV Reader")
+        .appName("TradeCorp Reader")
         .getOrCreate()
     )
+
     spark.sparkContext.setLogLevel("WARN")
 
+    temporary_root = Path(
+        os.getenv("LOCAL_TMP_DIR", "/home/jovyan/data/tmp")
+    )
+    temporary_root.mkdir(parents=True, exist_ok=True)
+
     try:
-        temporary_directory = tempfile.mkdtemp(
-            prefix="tradecorp_raw_",
-            dir=os.getenv("LOCAL_TMP_DIR", "/home/jovyan/data/tmp"),
-        )
-        dataframes = read_business_csvs(spark, temporary_directory)
-        for name, dataframe in dataframes.items():
-            print(f"{name}: {dataframe.count()} ligne(s)")
+        with tempfile.TemporaryDirectory(
+            prefix="tradecorp_reader_",
+            dir=temporary_root,
+        ) as temporary_directory:
+            business_directory = (
+                Path(temporary_directory) / "business"
+            )
+            reference_directory = (
+                Path(temporary_directory) / "reference"
+            )
+
+            dataframes = read_business_csvs(
+                spark,
+                business_directory,
+            )
+
+            country_currency, exchange_rates = read_reference_files(
+                spark,
+                reference_directory,
+            )
+
+            for table_name, dataframe in dataframes.items():
+                LOGGER.info(
+                    "%s : %s ligne(s)",
+                    table_name,
+                    dataframe.count(),
+                )
+
+            LOGGER.info(
+                "Référence pays-devise : %s ligne(s)",
+                country_currency.count(),
+            )
+            LOGGER.info(
+                "Taux de change chargés : %s",
+                len(exchange_rates),
+            )
+    except Exception:
+        LOGGER.exception("Échec de la lecture des données")
+        raise
     finally:
         spark.stop()
 
