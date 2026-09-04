@@ -4,3 +4,5 @@ __pycache__/
 data/tmp/
 *.pyc
 *.crc
+.env
+notebooks/connexionAzure.ipynb

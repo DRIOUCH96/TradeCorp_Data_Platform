@@ -16,6 +16,7 @@ sys.path.insert(
 )
 
 from transformer import (
+    add_local_currency,
     add_sous_total,
     clean_customers,
     clean_orders,
@@ -223,3 +224,27 @@ def test_clean_customers_applique_trim_et_initcap(
     )
 
     assert customer["country"] == "FRANCE"
+
+
+def test_add_local_currency_joint_devise_client_et_convertit(
+    spark,
+):
+    amounts = spark.createDataFrame(
+        [("FRANCE", 18.0), ("UK", 10.0)],
+        ["customer_country", "sous_total"],
+    )
+    reference = spark.createDataFrame(
+        [("FRANCE", "EUR"), ("UK", "GBP")],
+        ["country", "currency"],
+    )
+
+    result = add_local_currency(
+        amounts,
+        reference,
+        {"EUR": 1.0, "GBP": 0.86},
+    ).orderBy("customer_country").collect()
+
+    assert result[0]["currency"] == "EUR"
+    assert result[0]["sous_total_local"] == pytest.approx(18.0)
+    assert result[1]["currency"] == "GBP"
+    assert result[1]["sous_total_local"] == pytest.approx(8.6)

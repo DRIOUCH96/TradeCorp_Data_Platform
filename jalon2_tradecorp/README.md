@@ -1,5 +1,3 @@
-#Lancer le notebook jupyter:
-#docker logs tradecorp_spark 2>&1 | findstr token
 # TradeCorp Data Platform — Jalon 2
 
 ## Présentation

@@ -3,6 +3,8 @@ services:
     build: .
     image: tradecorp-pyspark:latest
     container_name: tradecorp_spark
+    env_file: 
+      - .env
     ports:
       - "8888:8888"
       - "4040:4040"
@@ -23,16 +25,18 @@ services:
   postgres:
     image: postgres:15
     container_name: tradecorp_postgres
+    env_file:
+      - .env
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: tradecorp
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5434:5432"
     volumes:
       - tradecorp_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d tradecorp"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -41,8 +45,8 @@ services:
     image: dpage/pgadmin4
     container_name: tradecorp_pgadmin
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@tradecorp.com
-      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
     ports:
       - "8086:80"
     volumes:
@@ -50,7 +54,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-
 volumes:
   tradecorp_pgdata:
   tradecorp_pgadmin_data:
