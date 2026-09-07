@@ -1,9 +1,13 @@
+name: tradecorp
+
 services:
   spark:
-    build: .
-    image: tradecorp-pyspark:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tradecorp-spark:latest
     container_name: tradecorp_spark
-    env_file: 
+    env_file:
       - .env
     ports:
       - "8888:8888"
@@ -15,45 +19,68 @@ services:
       - ./tests:/home/jovyan/tests
     environment:
       JUPYTER_ENABLE_LAB: "yes"
-      #PYTHONPATH: /home/jovyan/src
       PYTHONPATH: "/usr/local/spark/python/lib/py4j-0.10.9.9-src.zip:/usr/local/spark/python:/home/jovyan/src"
       PYSPARK_SUBMIT_ARGS: "--packages org.postgresql:postgresql:42.7.0 pyspark-shell"
-    depends_on:
-      postgres:
-        condition: service_healthy
 
   postgres:
     image: postgres:15
     container_name: tradecorp_postgres
-    env_file:
-      - .env
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    ports:
-      - "5434:5432"
+      POSTGRES_USER: ${AIRFLOW_DB_USER}
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD}
+      POSTGRES_DB: ${AIRFLOW_DB_NAME}
     volumes:
-      - tradecorp_pgdata:/var/lib/postgresql/data
+      - airflow_postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d ${POSTGRES_DB}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${AIRFLOW_DB_USER} -d ${AIRFLOW_DB_NAME}"
+        ]
       interval: 5s
       timeout: 5s
       retries: 10
 
-  pgadmin:
-    image: dpage/pgadmin4
-    container_name: tradecorp_pgadmin
-    environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
-    ports:
-      - "8086:80"
-    volumes:
-      - tradecorp_pgadmin_data:/var/lib/pgadmin
+  airflow:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    image: tradecorp-airflow:2.8.0
+    container_name: tradecorp_airflow
     depends_on:
       postgres:
         condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@postgres:5432/${AIRFLOW_DB_NAME}"
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    ports:
+      - "8087:8080"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - ./.env:/opt/airflow/.env:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - airflow_logs:/opt/airflow/logs
+    command:
+      - bash
+      - -c
+      - |
+        set -e
+        airflow db migrate
+        airflow users create \
+          --username "${AIRFLOW_ADMIN_USERNAME}" \
+          --password "${AIRFLOW_ADMIN_PASSWORD}" \
+          --firstname "Admin" \
+          --lastname "TradeCorp" \
+          --role "Admin" \
+          --email "${AIRFLOW_ADMIN_EMAIL}" || true
+        airflow webserver --port 8080 &
+        exec airflow scheduler
+
 volumes:
-  tradecorp_pgdata:
-  tradecorp_pgadmin_data:
+  airflow_postgres_data:
+  airflow_logs:
