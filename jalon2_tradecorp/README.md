@@ -210,3 +210,32 @@ sous_total_local
 ```powershell
 docker compose down
 ```
+## Extraits des logs Airflow
+
+### Récupération des taux de change
+
+```text
+Nombre de devises récupérées : 166
+Taux de change déposés dans raw/reference/exchange_rates.json
+```
+
+### Écriture du résultat dans ADLS
+
+```text
+Parquet intermédiaire chargé : 2082 lignes
+Fichier Parquet envoyé dans le conteneur clean
+Upload ADLS terminé avec succès : clean/orders_enriched
+```
+
+### Capture des logs de la tâche writer
+
+![Upload ADLS depuis Airflow](captures/05-airflow-writer-upload-log.png)
+## Vérification de l’idempotence
+
+Le DAG a été exécuté deux fois consécutivement.
+
+Avant chaque upload, `writer.py` supprime les blobs présents sous
+`clean/orders_enriched/`. Le DataFrame est écrit avec `coalesce(1)`.
+
+Après la deuxième exécution, le dossier contient toujours un seul
+fichier `part-....parquet`. Le pipeline est donc idempotent.
