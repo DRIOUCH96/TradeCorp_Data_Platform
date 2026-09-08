@@ -239,3 +239,27 @@ Avant chaque upload, `writer.py` supprime les blobs présents sous
 
 Après la deuxième exécution, le dossier contient toujours un seul
 fichier `part-....parquet`. Le pipeline est donc idempotent.
+## Planification automatique du DAG
+
+Le DAG `tradecorp_etl_pipeline` utilise la planification suivante :
+
+```python
+schedule_interval="0 6 * * *"
+start_date=datetime(2024, 1, 1)
+catchup=False
+![Prochaine exécution planifiée](captures/07-airflow-next-run.png)
+```
+
+La valeur `start_date` indique la date à partir de laquelle Airflow peut
+planifier le DAG. Elle ne déclenche pas automatiquement toutes les
+exécutions comprises entre cette date et la date d'activation du DAG.
+
+L'option `catchup=False` désactive le rattrapage des exécutions passées.
+Ainsi, malgré une `start_date` fixée au 1er janvier 2024, Airflow n'a pas
+créé une exécution pour chaque journée écoulée. Seules les exécutions
+courantes et futures sont planifiées.
+
+Le planning `0 6 * * *` lance le DAG quotidiennement à 06:00 dans le
+fuseau horaire d'Airflow. Notre environnement utilise UTC.
+
+Prochaine exécution observée : 2026-09-08T06:00:00+00:00.

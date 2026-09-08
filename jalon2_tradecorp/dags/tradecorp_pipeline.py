@@ -5,8 +5,8 @@ from docker.types import Mount
 import os
 default_args = {
     'owner': 'tradecorp', 
-    "retries": 0,
-    "retry_delay": timedelta(minutes=1),
+    "retries": 5,
+    "retry_delay": timedelta(minutes=5),
 }
 PROJECT_PATH = (
     "//c/Users/driou/Downloads/"
