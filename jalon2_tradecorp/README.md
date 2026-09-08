@@ -263,3 +263,10 @@ Le planning `0 6 * * *` lance le DAG quotidiennement à 06:00 dans le
 fuseau horaire d'Airflow. Notre environnement utilise UTC.
 
 Prochaine exécution observée : 2026-09-08T06:00:00+00:00.
+## Bonus : dossier de déclenchement FileSensor
+
+Le dossier local `data/trigger` est monté dans le conteneur Airflow à
+l'emplacement `/opt/airflow/data/trigger`.
+
+Ce montage permet au futur `FileSensor`, exécuté par Airflow, de détecter
+un fichier créé depuis la machine hôte.
