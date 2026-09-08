@@ -3,6 +3,7 @@ from airflow.providers.docker.operators.docker import DockerOperator
 from datetime import datetime, timedelta
 from docker.types import Mount
 import os
+from airflow.sensors.filesystem import FileSensor
 default_args = {
     'owner': 'tradecorp', 
     "retries": 5,
@@ -99,6 +100,14 @@ with DAG(
     catchup=False,
     tags=["tradecorp", "etl","spark"],
 ) as dag:
+    wait_for_trigger_file = FileSensor(
+        task_id="wait_for_trigger_file",
+        filepath="/opt/airflow/data/trigger/go.txt",
+        fs_conn_id="fs_default",
+        poke_interval=30,
+        timeout=3600,
+        mode="poke",
+    )
     t0 = create_task(
         task_id="fetch_exchange_rates",
         command="python /home/jovyan/src/fetch_exchange_rates.py"
@@ -115,7 +124,7 @@ with DAG(
         task_id="writer",
         command="spark-submit /home/jovyan/src/writer.py"
     )
-    t0 >> t1 >> t2 >> t3  # Définition des dépendances entre les tâches
+    wait_for_trigger_file >> t1 >> t2 >> t3  # Définition des dépendances entre les tâches
     
     
     

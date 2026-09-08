@@ -270,3 +270,12 @@ l'emplacement `/opt/airflow/data/trigger`.
 
 Ce montage permet au futur `FileSensor`, exécuté par Airflow, de détecter
 un fichier créé depuis la machine hôte.
+### Attente du fichier de déclenchement
+
+La tâche `wait_for_trigger_file` utilise un `FileSensor` pour attendre le
+fichier `/opt/airflow/data/trigger/go.txt`.
+
+Le sensor vérifie sa présence toutes les 30 secondes et abandonne après
+une heure. Il est placé avant `fetch_exchange_rates`, ce qui empêche le
+pipeline de démarrer tant que le fichier de déclenchement n'est pas
+disponible.

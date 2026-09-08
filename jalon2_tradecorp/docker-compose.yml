@@ -59,6 +59,7 @@ services:
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
       AIRFLOW__WEBSERVER__WORKERS: 1
       AIRFLOW__WEBSERVER__WEB__SERVER__MASTER__TIMEOUT: 300
+      AIRFLOW_CONN_FS_DEFAULT: "fs:///?path=/"
     ports:
       - "8087:8080"
     volumes:
