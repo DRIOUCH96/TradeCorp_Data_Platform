@@ -247,7 +247,7 @@ Le DAG `tradecorp_etl_pipeline` utilise la planification suivante :
 schedule_interval="0 6 * * *"
 start_date=datetime(2024, 1, 1)
 catchup=False
-![Prochaine exécution planifiée](captures/07-airflow-next-run.png)
+![Prochaine exécution planifiée](captures/06-airflow-next-run.png)
 ```
 
 La valeur `start_date` indique la date à partir de laquelle Airflow peut
@@ -279,3 +279,21 @@ Le sensor vérifie sa présence toutes les 30 secondes et abandonne après
 une heure. Il est placé avant `fetch_exchange_rates`, ce qui empêche le
 pipeline de démarrer tant que le fichier de déclenchement n'est pas
 disponible.
+### Test du FileSensor
+
+Le DAG a d'abord été déclenché sans le fichier `go.txt`. La tâche
+`wait_for_trigger_file` est restée en cours d'exécution tandis que les
+tâches suivantes attendaient.
+
+![FileSensor en attente](captures/bonus-filesensor-waiting.png)
+
+Le fichier `data/trigger/go.txt` a ensuite été créé depuis la machine
+hôte. Grâce au volume Docker, Airflow l'a détecté dans
+`/opt/airflow/data/trigger/go.txt`.
+
+Le sensor est passé en succès et les quatre tâches du pipeline ont été
+exécutées dans l'ordre prévu.
+
+![FileSensor puis pipeline en succès](captures/bonus-filesensor-success.png)
+
+Le fichier `go.txt` a été supprimé à la fin du test.
