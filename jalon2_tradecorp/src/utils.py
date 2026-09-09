@@ -5,7 +5,7 @@ from azure.storage.blob import BlobServiceClient
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 
-
+#Connexion à Azure Data Lake Storage Gen2
 def create_blob_service_client() -> BlobServiceClient:
     """Crée le client de connexion à ADLS Gen2."""
 
@@ -17,7 +17,7 @@ def create_blob_service_client() -> BlobServiceClient:
         credential=account_key,
     )
 
-
+# Téléchargement d'un fichier depuis ADLS Gen2
 def download_blob(
     blob_name: str,
     destination: str | Path,
@@ -44,7 +44,7 @@ def download_blob(
 
     return str(destination_path)
 
-
+# Nettoyage des DataFrames
 def clean_customers(df: DataFrame) -> DataFrame:
     """Nettoie la table des clients."""
 

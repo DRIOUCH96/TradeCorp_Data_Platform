@@ -124,7 +124,7 @@ with DAG(
         task_id="writer",
         command="spark-submit /home/jovyan/src/writer.py"
     )
-    wait_for_trigger_file >> t1 >> t2 >> t3  # Définition des dépendances entre les tâches
+    wait_for_trigger_file >> t0 >> t1 >> t2 >> t3  # Définition des dépendances entre les tâches
     
     
     

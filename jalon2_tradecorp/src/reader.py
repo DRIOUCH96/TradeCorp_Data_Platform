@@ -22,7 +22,7 @@ BUSINESS_CSV_FILES = (
     "suppliers.csv",
 )
 
-
+## Téléchargement des fichiers métier depuis ADLS
 def download_business_csvs(
     destination: str | Path,
 ) -> dict[str, str]:
@@ -48,7 +48,7 @@ def download_business_csvs(
 
     return local_paths
 
-
+# Lecture des fichiers métier avec Spark
 def read_business_csvs(
     spark: SparkSession,
     destination: str | Path,
@@ -66,7 +66,7 @@ def read_business_csvs(
         for table_name, local_path in local_paths.items()
     }
 
-
+# Téléchargement des fichiers de référence avec Spark
 def download_reference_files(
     destination: str | Path,
 ) -> dict[str, str]:
@@ -80,14 +80,17 @@ def download_reference_files(
         "reference",
     ).strip("/")
 
-    filenames = (
-        "country_currency.csv",
-        "exchange_rates.json",
-    )
+    reference_files = {
+        "country_currency": os.getenv(
+            "COUNTRY_CURRENCY_FILENAME",
+            "country_currency.csv",
+        ),
+        "exchange_rates": "exchange_rates.json",
+    }
 
     local_paths = {}
 
-    for filename in filenames:
+    for reference_name, filename in reference_files.items():
         local_path = destination_path / filename
         blob_name = f"{reference_prefix}/{filename}"
 
@@ -96,13 +99,13 @@ def download_reference_files(
             destination=local_path,
         )
 
-        local_paths[Path(filename).stem] = str(local_path)
+        local_paths[reference_name] = str(local_path)
 
         LOGGER.info("Fichier de référence téléchargé : %s", blob_name)
 
     return local_paths
 
-
+# Lecture des fichiers de référence avec Spark
 def read_reference_files(
     spark: SparkSession,
     destination: str | Path,
@@ -137,7 +140,7 @@ def read_reference_files(
 
     return country_currency, exchange_rates
 
-
+# Test de lecture des fichiers métier et de référence avec Spark
 def main() -> None:
     """Teste le téléchargement et la lecture des fichiers ADLS."""
 

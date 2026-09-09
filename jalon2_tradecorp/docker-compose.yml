@@ -12,6 +12,12 @@ services:
     ports:
       - "8888:8888"
       - "4040:4040"
+    healthcheck:
+      test: ["CMD", "curl","-f","http://localhost:8888/api"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     volumes:
       - ./data:/home/jovyan/data
       - ./notebooks:/home/jovyan/notebooks

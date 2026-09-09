@@ -6,3 +6,5 @@ data/tmp/
 *.crc
 .env
 notebooks/connexionAzure.ipynb
+data/staging/
+notebooks/brouillon.ipynb

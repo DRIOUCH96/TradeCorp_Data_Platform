@@ -1,6 +1,6 @@
 import logging
 import os
-
+import json
 import requests
 from azure.storage.blob import BlobServiceClient, ContentSettings
 
@@ -98,6 +98,13 @@ def main() -> None:
         )
 
         raw_json = fetch_exchange_rates()
+        payload = json.loads(raw_json)
+        currency_count = len(payload["rates"])
+
+        LOGGER.info(
+            "Nombre de devises récupérées : %s",
+            currency_count,
+        )
         destination = upload_exchange_rates(raw_json)
 
         LOGGER.info(
